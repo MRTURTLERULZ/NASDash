@@ -18,20 +18,39 @@ function loadUsers(): User[] {
     return usersCache;
   }
 
-  const usersPath = path.join(process.cwd(), 'users.json');
+  // Try multiple possible locations
+  const possiblePaths = [
+    path.join(process.cwd(), 'users.json'),
+    path.join(__dirname, '..', 'users.json'),
+    path.join(process.cwd(), '..', 'users.json'),
+  ];
+
+  console.log('Current working directory:', process.cwd());
+  console.log('__dirname:', __dirname);
   
-  try {
-    if (fs.existsSync(usersPath)) {
-      const fileContent = fs.readFileSync(usersPath, 'utf-8');
-      const data = JSON.parse(fileContent);
-      usersCache = data.users || [];
-      return usersCache;
+  for (const usersPath of possiblePaths) {
+    console.log('Trying to load users from:', usersPath);
+    
+    try {
+      if (fs.existsSync(usersPath)) {
+        const fileContent = fs.readFileSync(usersPath, 'utf-8');
+        const data = JSON.parse(fileContent);
+        usersCache = data.users || [];
+        console.log(`✓ Loaded ${usersCache.length} users from: ${usersPath}`);
+        return usersCache;
+      }
+    } catch (error) {
+      console.error(`Error loading users.json from ${usersPath}:`, error);
+      if (error instanceof Error) {
+        console.error('Error details:', error.message);
+      }
+      // Continue to next path
     }
-  } catch (error) {
-    console.error('Error loading users.json:', error);
   }
 
   // Fallback to empty array if file doesn't exist
+  console.error('✗ users.json not found in any of the expected locations');
+  console.warn('No users loaded - returning empty array');
   usersCache = [];
   return usersCache;
 }

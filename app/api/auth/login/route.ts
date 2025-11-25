@@ -40,8 +40,9 @@ export async function POST(request: NextRequest) {
       { status: 401 }
     );
   } catch (error) {
+    console.error('Login error:', error);
     return NextResponse.json(
-      { error: 'Internal server error' },
+      { error: error instanceof Error ? error.message : 'Internal server error' },
       { status: 500 }
     );
   }
