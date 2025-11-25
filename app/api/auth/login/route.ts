@@ -1,9 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { createSession, clearSessionCookie } from '@/lib/auth';
+import { createSession } from '@/lib/auth';
+import { validateUser } from '@/lib/users';
 import { cookies } from 'next/headers';
-
-const DASH_USERNAME = process.env.DASH_USERNAME || 'admin';
-const DASH_PASSWORD = process.env.DASH_PASSWORD || 'changeme';
 
 export async function POST(request: NextRequest) {
   try {
@@ -17,8 +15,11 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    if (username === DASH_USERNAME && password === DASH_PASSWORD) {
-      const token = await createSession(username);
+    // Validate user credentials
+    const user = validateUser(username, password);
+
+    if (user) {
+      const token = await createSession(user.username, user.folder, user.isAdmin);
       const cookieStore = await cookies();
       
       cookieStore.set({

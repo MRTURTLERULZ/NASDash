@@ -1,8 +1,17 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { uploadFile } from '@/lib/fileService';
+import { getSession } from '@/lib/auth';
 
 export async function POST(request: NextRequest) {
   try {
+    const session = await getSession();
+    if (!session) {
+      return NextResponse.json(
+        { error: 'Unauthorized' },
+        { status: 401 }
+      );
+    }
+
     const formData = await request.formData();
     const files = formData.getAll('file') as File[];
     const path = (formData.get('path') as string) || '/';
@@ -15,7 +24,7 @@ export async function POST(request: NextRequest) {
     }
 
     // Upload all files
-    const uploadPromises = files.map(file => uploadFile(file, path));
+    const uploadPromises = files.map(file => uploadFile(file, path, session.folder, session.isAdmin));
     await Promise.all(uploadPromises);
 
     return NextResponse.json({ success: true, count: files.length });

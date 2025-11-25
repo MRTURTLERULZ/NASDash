@@ -1,0 +1,29 @@
+{
+  "users": [
+    {
+      "username": "admin",
+      "password": "admin123",
+      "folder": "/",
+      "isAdmin": true
+    },
+    {
+      "username": "alice",
+      "password": "alice2024",
+      "folder": "alice",
+      "isAdmin": false
+    },
+    {
+      "username": "bob",
+      "password": "bob2024",
+      "folder": "bob",
+      "isAdmin": false
+    },
+    {
+      "username": "charlie",
+      "password": "charlie2024",
+      "folder": "charlie",
+      "isAdmin": false
+    }
+  ]
+}
+

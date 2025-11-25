@@ -1,10 +1,19 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getFileStats } from '@/lib/fileService';
+import { getSession } from '@/lib/auth';
 import { createReadStream } from 'fs';
 import { Readable } from 'stream';
 
 export async function GET(request: NextRequest) {
   try {
+    const session = await getSession();
+    if (!session) {
+      return NextResponse.json(
+        { error: 'Unauthorized' },
+        { status: 401 }
+      );
+    }
+
     const searchParams = request.nextUrl.searchParams;
     const path = searchParams.get('path');
 
@@ -15,7 +24,7 @@ export async function GET(request: NextRequest) {
       );
     }
 
-    const fileStats = await getFileStats(path);
+    const fileStats = await getFileStats(path, session.folder, session.isAdmin);
     const fileStream = createReadStream(fileStats.path);
 
     // Convert Node stream to Web ReadableStream

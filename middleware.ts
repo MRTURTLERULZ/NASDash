@@ -31,6 +31,10 @@ export async function middleware(request: NextRequest) {
   // Verify the token
   try {
     const { payload } = await jwtVerify(token, secretKey);
+    // Verify payload has required fields (for backward compatibility)
+    if (!payload.username) {
+      throw new Error('Invalid token payload');
+    }
     // Token is valid, allow access
     return NextResponse.next();
   } catch {

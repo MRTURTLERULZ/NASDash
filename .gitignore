@@ -28,6 +28,9 @@ yarn-error.log*
 .env*.local
 .env
 
+# user configuration (contains passwords)
+users.json
+
 # vercel
 .vercel
 

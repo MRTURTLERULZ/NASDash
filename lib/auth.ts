@@ -11,8 +11,8 @@ const secretKey = new TextEncoder().encode(SESSION_SECRET);
 /**
  * Creates a session token and sets it as an HTTP-only cookie
  */
-export async function createSession(username: string): Promise<string> {
-  const token = await new SignJWT({ username })
+export async function createSession(username: string, folder: string, isAdmin: boolean): Promise<string> {
+  const token = await new SignJWT({ username, folder, isAdmin })
     .setProtectedHeader({ alg: 'HS256' })
     .setIssuedAt()
     .setExpirationTime('7d')
@@ -22,21 +22,33 @@ export async function createSession(username: string): Promise<string> {
 }
 
 /**
- * Verifies a session token and returns the username if valid
+ * Verifies a session token and returns session data if valid
  */
-export async function verifySession(token: string): Promise<string | null> {
+export async function verifySession(token: string): Promise<{ username: string; folder: string; isAdmin: boolean } | null> {
   try {
     const { payload } = await jwtVerify(token, secretKey);
-    return payload.username as string;
+    return {
+      username: payload.username as string,
+      folder: (payload.folder as string) || '/',
+      isAdmin: (payload.isAdmin as boolean) || false,
+    };
   } catch {
     return null;
   }
 }
 
 /**
+ * Gets just the username from session (for backward compatibility)
+ */
+export async function getSessionUsername(): Promise<string | null> {
+  const session = await getSession();
+  return session?.username || null;
+}
+
+/**
  * Gets the current session from cookies
  */
-export async function getSession(): Promise<string | null> {
+export async function getSession(): Promise<{ username: string; folder: string; isAdmin: boolean } | null> {
   const cookieStore = await cookies();
   const token = cookieStore.get(SESSION_COOKIE_NAME)?.value;
   

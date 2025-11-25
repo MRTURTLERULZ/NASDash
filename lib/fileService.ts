@@ -1,8 +1,9 @@
 import fs from 'fs/promises';
+import fsSync from 'fs';
 import path from 'path';
 import { exec } from 'child_process';
 import { promisify } from 'util';
-import { normalizePath, getRelativePath } from './pathUtils';
+import { normalizePath, normalizePathForUser, getRelativePath, getRelativePathForUser } from './pathUtils';
 
 const execAsync = promisify(exec);
 const FILE_ROOT = process.env.FILE_ROOT || '/mnt/ssd';
@@ -24,13 +25,17 @@ export interface StorageStats {
 }
 
 /**
- * Lists directory contents
+ * Lists directory contents for a specific user
  */
-export async function listDirectory(relativePath: string = '/'): Promise<{
+export async function listDirectory(
+  relativePath: string = '/',
+  userFolder: string = '/',
+  isAdmin: boolean = false
+): Promise<{
   currentPath: string;
   items: FileItem[];
 }> {
-  const normalizedPath = normalizePath(relativePath);
+  const normalizedPath = normalizePathForUser(relativePath, userFolder, isAdmin);
   
   if (!normalizedPath) {
     throw new Error('Invalid path');
@@ -42,7 +47,22 @@ export async function listDirectory(relativePath: string = '/'): Promise<{
       throw new Error('Path is not a directory');
     }
 
-    const entries = await fs.readdir(normalizedPath, { withFileTypes: true });
+    let entries;
+    try {
+      entries = await fs.readdir(normalizedPath, { withFileTypes: true });
+    } catch (readError) {
+      // If we can't read the directory, return empty list with a warning
+      const errorMsg = readError instanceof Error ? readError.message : 'Unknown error';
+      if (errorMsg.includes('EACCES') || errorMsg.includes('permission denied')) {
+        console.warn(`Permission denied reading directory ${normalizedPath}`);
+        return {
+          currentPath: getRelativePathForUser(normalizedPath, userFolder, isAdmin),
+          items: [],
+        };
+      }
+      throw readError;
+    }
+
     const items: FileItem[] = [];
 
     for (const entry of entries) {
@@ -54,7 +74,7 @@ export async function listDirectory(relativePath: string = '/'): Promise<{
           type: stat.isDirectory() ? 'directory' : 'file',
           size: stat.isDirectory() ? null : stat.size,
           modified: stat.mtime.toISOString(),
-          path: getRelativePath(fullPath),
+          path: getRelativePathForUser(fullPath, userFolder, isAdmin),
         });
       } catch (err) {
         // Skip files we can't stat (permissions, etc.)
@@ -71,7 +91,7 @@ export async function listDirectory(relativePath: string = '/'): Promise<{
     });
 
     return {
-      currentPath: getRelativePath(normalizedPath),
+      currentPath: getRelativePathForUser(normalizedPath, userFolder, isAdmin),
       items,
     };
   } catch (error) {
@@ -80,14 +100,19 @@ export async function listDirectory(relativePath: string = '/'): Promise<{
 }
 
 /**
- * Gets storage statistics for the FILE_ROOT
+ * Gets storage statistics for a specific user's folder
  */
-export async function getStorageStats(): Promise<StorageStats> {
+export async function getStorageStats(userFolder: string = '/', isAdmin: boolean = false): Promise<StorageStats> {
   try {
-    // Check if FILE_ROOT exists
+    // Determine the root path for this user
+    const userRootPath = isAdmin && userFolder === '/' 
+      ? FILE_ROOT 
+      : path.join(FILE_ROOT, userFolder);
+    
+    // Check if user's root exists
     let rootExists = false;
     try {
-      await fs.access(FILE_ROOT);
+      await fs.access(userRootPath);
       rootExists = true;
     } catch {
       // Directory doesn't exist - return zeros
@@ -108,34 +133,43 @@ export async function getStorageStats(): Promise<StorageStats> {
     const isWindows = process.platform === 'win32';
     
     try {
-      if (isWindows) {
-        // Windows: use wmic to get disk info
-        // Get the drive letter from the path
-        const driveLetter = path.parse(FILE_ROOT).root.replace(/[\\/]/g, '');
-        if (driveLetter) {
-          const { stdout } = await execAsync(
-            `wmic logicaldisk where "DeviceID='${driveLetter}'" get Size,FreeSpace /format:value`
-          );
-          const lines = stdout.split('\n');
-          for (const line of lines) {
-            if (line.startsWith('Size=')) {
-              total = parseInt(line.split('=')[1].trim(), 10);
-            } else if (line.startsWith('FreeSpace=')) {
-              free = parseInt(line.split('=')[1].trim(), 10);
+      // For admin users, show full disk stats. For regular users, we'll calculate folder size
+      if (isAdmin && userFolder === '/') {
+        // Admin: show full disk stats
+        if (isWindows) {
+          // Windows: use wmic to get disk info
+          const driveLetter = path.parse(FILE_ROOT).root.replace(/[\\/]/g, '');
+          if (driveLetter) {
+            const { stdout } = await execAsync(
+              `wmic logicaldisk where "DeviceID='${driveLetter}'" get Size,FreeSpace /format:value`
+            );
+            const lines = stdout.split('\n');
+            for (const line of lines) {
+              if (line.startsWith('Size=')) {
+                total = parseInt(line.split('=')[1].trim(), 10);
+              } else if (line.startsWith('FreeSpace=')) {
+                free = parseInt(line.split('=')[1].trim(), 10);
+              }
             }
+            used = total - free;
           }
-          used = total - free;
+        } else {
+          // Linux/Unix: use df command
+          const { stdout } = await execAsync(`df -B1 "${FILE_ROOT}"`);
+          const lines = stdout.trim().split('\n');
+          if (lines.length > 1) {
+            const parts = lines[1].split(/\s+/);
+            total = parseInt(parts[1], 10) || 0;
+            used = parseInt(parts[2], 10) || 0;
+            free = parseInt(parts[3], 10) || 0;
+          }
         }
       } else {
-        // Linux/Unix: use df command
-        const { stdout } = await execAsync(`df -B1 "${FILE_ROOT}"`);
-        const lines = stdout.trim().split('\n');
-        if (lines.length > 1) {
-          const parts = lines[1].split(/\s+/);
-          total = parseInt(parts[1], 10) || 0;
-          used = parseInt(parts[2], 10) || 0;
-          free = parseInt(parts[3], 10) || 0;
-        }
+        // Regular users: calculate folder size (du command on Linux)
+        // For now, set to 0 - could implement folder size calculation later
+        total = 0;
+        used = 0;
+        free = 0;
       }
     } catch (err) {
       // If we can't get disk stats, just set to 0
@@ -173,7 +207,7 @@ export async function getStorageStats(): Promise<StorageStats> {
     }
 
     if (rootExists) {
-      await countItems(FILE_ROOT);
+      await countItems(userRootPath);
     }
 
     return {
@@ -189,26 +223,39 @@ export async function getStorageStats(): Promise<StorageStats> {
 }
 
 /**
- * Uploads a file to the specified directory
+ * Uploads a file to the specified directory for a specific user
  */
 export async function uploadFile(
   file: File,
-  relativePath: string = '/'
+  relativePath: string = '/',
+  userFolder: string = '/',
+  isAdmin: boolean = false
 ): Promise<void> {
-  const normalizedPath = normalizePath(relativePath);
+  const normalizedPath = normalizePathForUser(relativePath, userFolder, isAdmin);
   
   if (!normalizedPath) {
     throw new Error('Invalid path');
   }
 
   try {
+    // Check if we can write to the directory
+    try {
+      await fs.access(normalizedPath, fsSync.constants.W_OK);
+    } catch (accessError) {
+      throw new Error(`Permission denied: Cannot write to directory. Please check file permissions for ${normalizedPath}`);
+    }
+
     // Ensure directory exists
     await fs.mkdir(normalizedPath, { recursive: true });
 
     const filePath = path.join(normalizedPath, file.name);
     
-    // Validate the file path is still within FILE_ROOT
-    const normalizedFilePath = normalizePath(path.relative(FILE_ROOT, filePath));
+    // Validate the file path is still within user's allowed area
+    const normalizedFilePath = normalizePathForUser(
+      path.relative(isAdmin && userFolder === '/' ? FILE_ROOT : path.join(FILE_ROOT, userFolder), filePath),
+      userFolder,
+      isAdmin
+    );
     if (!normalizedFilePath) {
       throw new Error('Invalid file path');
     }
@@ -218,15 +265,22 @@ export async function uploadFile(
     const buffer = Buffer.from(arrayBuffer);
     await fs.writeFile(normalizedFilePath, buffer);
   } catch (error) {
+    if (error instanceof Error && error.message.includes('Permission denied')) {
+      throw error;
+    }
     throw new Error(`Failed to upload file: ${error instanceof Error ? error.message : 'Unknown error'}`);
   }
 }
 
 /**
- * Deletes a file or directory recursively
+ * Deletes a file or directory recursively for a specific user
  */
-export async function deleteItem(relativePath: string): Promise<void> {
-  const normalizedPath = normalizePath(relativePath);
+export async function deleteItem(
+  relativePath: string,
+  userFolder: string = '/',
+  isAdmin: boolean = false
+): Promise<void> {
+  const normalizedPath = normalizePathForUser(relativePath, userFolder, isAdmin);
   
   if (!normalizedPath) {
     throw new Error('Invalid path');
@@ -234,7 +288,11 @@ export async function deleteItem(relativePath: string): Promise<void> {
 
   // Prevent deleting the root directory
   const root = path.resolve(FILE_ROOT);
-  if (normalizedPath === root) {
+  const userRoot = isAdmin && userFolder === '/' 
+    ? root 
+    : path.resolve(FILE_ROOT, userFolder);
+  
+  if (normalizedPath === root || normalizedPath === userRoot) {
     throw new Error('Cannot delete root directory');
   }
 
@@ -252,14 +310,18 @@ export async function deleteItem(relativePath: string): Promise<void> {
 }
 
 /**
- * Gets file stats for download
+ * Gets file stats for download for a specific user
  */
-export async function getFileStats(relativePath: string): Promise<{
+export async function getFileStats(
+  relativePath: string,
+  userFolder: string = '/',
+  isAdmin: boolean = false
+): Promise<{
   path: string;
   size: number;
   mime: string;
 }> {
-  const normalizedPath = normalizePath(relativePath);
+  const normalizedPath = normalizePathForUser(relativePath, userFolder, isAdmin);
   
   if (!normalizedPath) {
     throw new Error('Invalid path');
